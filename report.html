@@ -1,0 +1,688 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Adult Census Income Prediction & Fairness Audit Report</title>
+<style>
+
+@page {
+    margin: 18mm 16mm;
+    size: A4;
+}
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    font-size: 10.5pt;
+    line-height: 1.55;
+    color: #1e293b;
+    max-width: 860px;
+    margin: 0 auto;
+    padding: 10px;
+}
+h1 {
+    font-size: 20pt;
+    border-bottom: 2px solid #1e3a8a;
+    padding-bottom: 6px;
+    color: #1e3a8a;
+    margin-top: 0;
+}
+h2 {
+    font-size: 14pt;
+    border-bottom: 1px solid #cbd5e1;
+    padding-bottom: 4px;
+    color: #1d4ed8;
+    margin-top: 24px;
+    page-break-after: avoid;
+}
+h3 {
+    font-size: 12pt;
+    color: #334155;
+    margin-top: 18px;
+    page-break-after: avoid;
+}
+table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 14px 0;
+    font-size: 9.5pt;
+    page-break-inside: avoid;
+}
+th, td {
+    border: 1px solid #cbd5e1;
+    padding: 6px 9px;
+    text-align: left;
+}
+th {
+    background-color: #f1f5f9;
+    font-weight: 600;
+}
+tr:nth-child(even) {
+    background-color: #f8fafc;
+}
+code {
+    font-family: Consolas, Monaco, "Courier New", monospace;
+    font-size: 9pt;
+    background-color: #f1f5f9;
+    padding: 1px 4px;
+    border-radius: 3px;
+}
+pre {
+    background-color: #f8fafc;
+    border: 1px solid #e2e8f0;
+    padding: 10px;
+    border-radius: 4px;
+    font-size: 9pt;
+}
+img {
+    max-width: 90%;
+    height: auto;
+    display: block;
+    margin: 14px auto;
+    border: 1px solid #e2e8f0;
+    border-radius: 4px;
+    page-break-inside: avoid;
+}
+blockquote {
+    border-left: 3px solid #3b82f6;
+    margin: 14px 0;
+    padding: 6px 14px;
+    background-color: #eff6ff;
+    color: #1e3a8a;
+}
+hr {
+    border: none;
+    border-top: 1px solid #e2e8f0;
+    margin: 20px 0;
+}
+
+</style>
+</head>
+<body>
+<h1>Predictive Modeling &amp; Fairness Audit: Adult Census Income</h1>
+<p><strong>Author Roll Suffix:</strong> 8 (Adult Census Income Dataset)<br />
+<strong>Dataset Source:</strong> UCI Machine Learning Repository (48,842 total observations)<br />
+<strong>Partitioning:</strong> 70% Training (34,189 rows) / 30% Testing (14,653 rows) | <strong>Random Seed:</strong> 758</p>
+<hr />
+<h2>Data Preprocessing Pipeline</h2>
+<h3>Data Ingestion and Merging</h3>
+<p>I began by downloading both the primary training slice (<code>adult.data</code>, 32,561 records) and the designated testing slice (<code>adult.test</code>, 16,281 records) directly from the UCI archive. Rather than sticking with the historical split—which had differing formatting quirks and trailing periods on income labels—I unified all 48,842 rows into a single table. From there, I stripped out leading and trailing whitespaces across all text fields and applied my own fresh 70/30 split using random seed 758.</p>
+<h3>Handling Missing Values</h3>
+<p>In this dataset, missing entries were originally logged using whitespace-padded question marks (<code>&quot; ?&quot;</code>). These showed up in three fields: <code>workclass</code>, <code>occupation</code>, and <code>native_country</code>. During initial ingestion with pandas, setting <code>na_values=[' ?', '?']</code> and enabling <code>skipinitialspace=True</code> mapped these entries straight to standard <code>NaN</code> values. Once cleaned and trimmed, I confirmed that 0 missing values remained in the downstream pipeline, preserving the full 48,842 observations.</p>
+<h3>Target Binarization</h3>
+<p>The response column (<code>income</code>) was converted into a binary numeric label: <code>1</code> if an individual earned over $50,000 annually (<code>&gt;50K</code>), and <code>0</code> otherwise (<code>&lt;=50K</code>). Across the combined dataset, 11,687 people fall into the higher bracket. That yields an overall positive class prevalence of 23.93% (roughly a 1-to-3 imbalance).</p>
+<h3>Categorical Encoding</h3>
+<p>Eight features contained discrete categories: <code>workclass</code>, <code>education</code>, <code>marital_status</code>, <code>occupation</code>, <code>relationship</code>, <code>race</code>, <code>sex</code>, and <code>native_country</code>. I transformed these using <code>pd.get_dummies(drop_first=True)</code> to avoid the dummy variable trap in my linear regressions. This step expanded our initial 15-column table into a design matrix containing 100 encoded numerical features.</p>
+<h3>Outlier Inspection &amp; Decisions</h3>
+<table>
+<thead>
+<tr>
+<th style="text-align:left">Feature</th>
+<th style="text-align:left">Q1</th>
+<th style="text-align:left">Q3</th>
+<th style="text-align:left">IQR</th>
+<th style="text-align:left">Flagged Count</th>
+<th style="text-align:left">Percentage</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:left">age</td>
+<td style="text-align:left">28.0</td>
+<td style="text-align:left">48.0</td>
+<td style="text-align:left">20.0</td>
+<td style="text-align:left">216</td>
+<td style="text-align:left">0.44%</td>
+</tr>
+<tr>
+<td style="text-align:left">fnlwgt</td>
+<td style="text-align:left">117,551</td>
+<td style="text-align:left">237,642</td>
+<td style="text-align:left">120,092</td>
+<td style="text-align:left">1,453</td>
+<td style="text-align:left">2.97%</td>
+</tr>
+<tr>
+<td style="text-align:left">education_num</td>
+<td style="text-align:left">9.0</td>
+<td style="text-align:left">12.0</td>
+<td style="text-align:left">3.0</td>
+<td style="text-align:left">1,794</td>
+<td style="text-align:left">3.67%</td>
+</tr>
+<tr>
+<td style="text-align:left">capital_gain</td>
+<td style="text-align:left">0.0</td>
+<td style="text-align:left">0.0</td>
+<td style="text-align:left">0.0</td>
+<td style="text-align:left">4,035</td>
+<td style="text-align:left">8.26%</td>
+</tr>
+<tr>
+<td style="text-align:left">capital_loss</td>
+<td style="text-align:left">0.0</td>
+<td style="text-align:left">0.0</td>
+<td style="text-align:left">0.0</td>
+<td style="text-align:left">2,282</td>
+<td style="text-align:left">4.67%</td>
+</tr>
+<tr>
+<td style="text-align:left">hours_per_week</td>
+<td style="text-align:left">40.0</td>
+<td style="text-align:left">45.0</td>
+<td style="text-align:left">5.0</td>
+<td style="text-align:left">13,496</td>
+<td style="text-align:left">27.63%</td>
+</tr>
+</tbody>
+</table>
+<p>I deliberately chose <strong>not to prune these outliers</strong>. Here is why: for both <code>capital_gain</code> and <code>capital_loss</code>, the vast majority of citizens report exactly $0, meaning Q1 = Q3 = IQR = 0. Under a mechanical $1.5 \times \text{IQR}$ rule, literally every person with investment income gets marked as an anomaly. But these values represent legitimate wealth accumulation—the exact signal a model needs to predict top-tier earners. Similarly, <code>hours_per_week</code> spikes at 40 hours for standard full-time jobs, creating an artificially narrow 5-hour IQR. Chopping off people working 35 or 50 hours a week would discard realistic labor dynamics.</p>
+<h3>Standardization &amp; Train-Test Split</h3>
+<p>Continuous numerical columns were scaled using <code>StandardScaler</code> fitted exclusively on the training partition to avoid information leakage.</p>
+<ul>
+<li><strong>Training partition:</strong> 34,189 samples (positive rate: 23.90%)</li>
+<li><strong>Testing partition:</strong> 14,653 samples (positive rate: 23.99%)</li>
+</ul>
+<hr />
+<h2>Part 1 — Model Construction &amp; Baseline Comparison</h2>
+<h3>Model A: Ordinary Least Squares (OLS)</h3>
+<p>I fitted an unconstrained Linear Probability Model (OLS) directly on the binary outcome. As expected with linear fits on probabilities, predictions wandered outside valid $[0, 1]$ bounds, bottoming out at −0.4257 and peaking at 1.6986 (mean: 0.2392).</p>
+<p>To convert these continuous scores into binary labels without arbitrary guessing, I used the median predicted value on the test set (<strong>0.2261</strong>) as the decision boundary. By definition, this split the test population cleanly into two equal halves:</p>
+<ul>
+<li>Flagged High-Risk / High-Income: 7,327 instances</li>
+<li>Flagged Low-Risk / Low-Income: 7,326 instances</li>
+</ul>
+<h3>Model B: Logistic Regression</h3>
+<p>I then fitted a standard Logistic Regression model with an L2 penalty ($C=1.0$). Its output represents proper probabilities bounded between 0.0000 and 1.0000 (mean: 0.2403). Using the standard classification threshold of $0.5$:</p>
+<ul>
+<li>Flagged High-Risk / High-Income: 2,887 instances</li>
+<li>Flagged Low-Risk / Low-Income: 11,766 instances</li>
+</ul>
+<h3>Model Concordance &amp; Classification Matrix</h3>
+<table>
+<thead>
+<tr>
+<th style="text-align:left"></th>
+<th style="text-align:left">Model B: Predicted Low (≤0.5)</th>
+<th style="text-align:left">Model B: Predicted High (&gt;0.5)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:left"><strong>Model A: Predicted Low (&lt;0.2261)</strong></td>
+<td style="text-align:left">7,308</td>
+<td style="text-align:left">18</td>
+</tr>
+<tr>
+<td style="text-align:left"><strong>Model A: Predicted High (≥0.2261)</strong></td>
+<td style="text-align:left">4,458</td>
+<td style="text-align:left">2,869</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><strong>Agreement:</strong> 10,177 samples (69.45%)</li>
+<li><strong>Discordance:</strong> 4,476 samples (30.55%)</li>
+<li><strong>Cohen's Kappa:</strong> $\kappa = 0.449$ (indicating only moderate inter-model agreement)</li>
+</ul>
+<h3>Performance Against Ground Truth Labels</h3>
+<ul>
+<li><strong>Model A Overall Accuracy:</strong> 0.7121 (Precision: 0.45, Recall: 0.94 on &gt;50K)</li>
+<li><strong>Model B Overall Accuracy:</strong> 0.8538 (Precision: 0.74, Recall: 0.61 on &gt;50K)</li>
+</ul>
+<p><img src="figures/part1_confusion_matrices.png" alt="Part 1 Confusion Matrices" /></p>
+<h3>Why Do the Two Models Classify People So Differently?</h3>
+<p>The disagreement isn't really about the underlying feature weights; it comes down to how each model sets its classification boundary. OLS forced a median cut-off at 0.2261. Because the real positive rate is only 24%, a 0.2261 threshold forces 50% of people into the &quot;high earner&quot; bucket, catching 94% of true high earners at the price of terrible precision (0.45). In contrast, logistic regression's 0.5 threshold respects the base rate and flags only 19.7% of people. The 4,458 individuals caught in the crossfire are moderate-probability cases (scores between 0.22 and 0.50) that OLS sweeps up aggressively while logistic regression ignores.</p>
+<hr />
+<h2>Part 2 — Stress-Testing &amp; Diagnostic Audits</h2>
+<h3>2.1: Simpson's Paradox Hunt (Subgroup Breakdown)</h3>
+<p>I split the 48,842 records by marital status into two distinct cohorts: Married (22,416 rows) versus Not-Married (26,426 rows).</p>
+<table>
+<thead>
+<tr>
+<th style="text-align:left">Cohort</th>
+<th style="text-align:left">Total Size</th>
+<th style="text-align:left">High Earner Rate (&gt;50K)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:left">Full Population</td>
+<td style="text-align:left">48,842</td>
+<td style="text-align:left">23.93%</td>
+</tr>
+<tr>
+<td style="text-align:left">Married Subgroup</td>
+<td style="text-align:left">22,416</td>
+<td style="text-align:left">44.60%</td>
+</tr>
+<tr>
+<td style="text-align:left">Unmarried Subgroup</td>
+<td style="text-align:left">26,426</td>
+<td style="text-align:left">6.39%</td>
+</tr>
+</tbody>
+</table>
+<h4>Logistic Regression Coefficients Across Slices</h4>
+<table>
+<thead>
+<tr>
+<th style="text-align:left">Feature</th>
+<th style="text-align:left">Aggregate Model</th>
+<th style="text-align:left">Married Slice</th>
+<th style="text-align:left">Unmarried Slice</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:left">age</td>
+<td style="text-align:left">0.3741</td>
+<td style="text-align:left">0.2942</td>
+<td style="text-align:left">0.5922</td>
+</tr>
+<tr>
+<td style="text-align:left">education_num</td>
+<td style="text-align:left">0.5576</td>
+<td style="text-align:left">0.5342</td>
+<td style="text-align:left">0.6389</td>
+</tr>
+<tr>
+<td style="text-align:left">hours_per_week</td>
+<td style="text-align:left">0.3628</td>
+<td style="text-align:left">0.3045</td>
+<td style="text-align:left">0.5183</td>
+</tr>
+<tr>
+<td style="text-align:left">capital_gain</td>
+<td style="text-align:left">2.3624</td>
+<td style="text-align:left">2.1291</td>
+<td style="text-align:left">2.7062</td>
+</tr>
+<tr>
+<td style="text-align:left"><strong>sex_Male</strong></td>
+<td style="text-align:left"><strong>+0.3230</strong></td>
+<td style="text-align:left"><strong>−0.0816</strong></td>
+<td style="text-align:left"><strong>+0.3053</strong></td>
+</tr>
+<tr>
+<td style="text-align:left">capital_loss</td>
+<td style="text-align:left">0.2605</td>
+<td style="text-align:left">0.2654</td>
+<td style="text-align:left">0.2504</td>
+</tr>
+<tr>
+<td style="text-align:left">fnlwgt</td>
+<td style="text-align:left">0.0806</td>
+<td style="text-align:left">0.0914</td>
+<td style="text-align:left">0.0343</td>
+</tr>
+</tbody>
+</table>
+<p><strong>The Sign Flip:</strong> In the full dataset, <code>sex_Male</code> has a positive coefficient of <strong>+0.3230</strong> (suggesting men earn more). But inside the married cohort, that weight reverses to <strong>−0.0816</strong>. Controlling for education and working hours, a married man in this sample is actually slightly less likely to cross the $50K line than a married woman.</p>
+<h4>Statsmodels 95% Confidence Intervals</h4>
+<ul>
+<li><strong>Full Model:</strong> <code>sex_Male</code> = 0.5539 [0.5237, 0.5841] (strictly positive)</li>
+<li><strong>Male Subgroup:</strong> <code>education_num</code> = 0.8457 [0.8142, 0.8773]</li>
+<li><strong>Female Subgroup:</strong> <code>education_num</code> = 0.9353 [0.8667, 1.0038]</li>
+</ul>
+<p><strong>Policy Warning:</strong> If a city council looked solely at the aggregate model, they would assume all men enjoy an unconditioned wage advantage. But the apparent gender boost is mostly driven by marriage demographics: married people earn vastly more (44.6% vs 6.4%), and men make up the bulk of the married records in this dataset. Blanket gender programs miss the real structural split, which is between married households and single workers.</p>
+<hr />
+<h3>2.2: Omitted-Variable Bias (OVB)</h3>
+<p>To simulate what happens when a critical sociological attribute is omitted, I stripped out all 6 dummy columns representing <code>marital_status</code> and re-trained the logistic model.</p>
+<table>
+<thead>
+<tr>
+<th style="text-align:left">Feature Name</th>
+<th style="text-align:left">Full Model Coef</th>
+<th style="text-align:left">Reduced Model Coef</th>
+<th style="text-align:left">Percentage Shift</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:left">age</td>
+<td style="text-align:left">0.3478</td>
+<td style="text-align:left">0.3833</td>
+<td style="text-align:left">+10.2%</td>
+</tr>
+<tr>
+<td style="text-align:left">education_num</td>
+<td style="text-align:left">0.5287</td>
+<td style="text-align:left">0.5411</td>
+<td style="text-align:left">+2.3%</td>
+</tr>
+<tr>
+<td style="text-align:left">hours_per_week</td>
+<td style="text-align:left">0.3540</td>
+<td style="text-align:left">0.3583</td>
+<td style="text-align:left">+1.2%</td>
+</tr>
+<tr>
+<td style="text-align:left">capital_gain</td>
+<td style="text-align:left">2.3590</td>
+<td style="text-align:left">2.3585</td>
+<td style="text-align:left">−0.0%</td>
+</tr>
+<tr>
+<td style="text-align:left">capital_loss</td>
+<td style="text-align:left">0.2645</td>
+<td style="text-align:left">0.2634</td>
+<td style="text-align:left">−0.4%</td>
+</tr>
+<tr>
+<td style="text-align:left">fnlwgt</td>
+<td style="text-align:left">0.0787</td>
+<td style="text-align:left">0.0773</td>
+<td style="text-align:left">−1.7%</td>
+</tr>
+<tr>
+<td style="text-align:left">sex_Male</td>
+<td style="text-align:left">0.3395</td>
+<td style="text-align:left">0.3265</td>
+<td style="text-align:left">−3.8%</td>
+</tr>
+<tr>
+<td style="text-align:left"><strong>relationship_Not-in-family</strong></td>
+<td style="text-align:left"><strong>+0.2128</strong></td>
+<td style="text-align:left"><strong>−0.8490</strong></td>
+<td style="text-align:left"><strong>−499.0%</strong></td>
+</tr>
+<tr>
+<td style="text-align:left">relationship_Other-relative</td>
+<td style="text-align:left">−0.0774</td>
+<td style="text-align:left">−0.3528</td>
+<td style="text-align:left">−355.6%</td>
+</tr>
+<tr>
+<td style="text-align:left">relationship_Own-child</td>
+<td style="text-align:left">−0.2045</td>
+<td style="text-align:left">−1.0615</td>
+<td style="text-align:left">−419.1%</td>
+</tr>
+</tbody>
+</table>
+<p><strong>The OVB Finding:</strong> When marriage is excluded, <code>relationship_Not-in-family</code> swings violently from <strong>+0.2128 to −0.8490</strong> (a <strong>−499.0% change</strong>). Why? Because &quot;Not-in-family&quot; serves as an undercover proxy for being unmarried. Without <code>marital_status</code> in the equation, the relationship dummies absorb the missing marital penalty.</p>
+<p>Yet, test set accuracy went from <strong>0.8538 down to 0.8537</strong>—a negligible drop of just 0.0001. An engineer tracking accuracy alone would never spot that the internal causal logic of their model just collapsed.</p>
+<hr />
+<h3>2.3: Adversarial Subset Analysis (High-Confidence Blunders)</h3>
+<p>I screened the test set for samples where the model was supremely confident ($P \ge 0.75$ or $P \le 0.25$) but completely mistaken.</p>
+<table>
+<thead>
+<tr>
+<th style="text-align:left">Evaluation Metric</th>
+<th style="text-align:left">Test Count</th>
+<th style="text-align:left">Share of Test Set</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:left">Total Evaluation Samples</td>
+<td style="text-align:left">14,653</td>
+<td style="text-align:left">100.0%</td>
+</tr>
+<tr>
+<td style="text-align:left">High-Confidence Erroneous Predictions</td>
+<td style="text-align:left">739</td>
+<td style="text-align:left">5.04%</td>
+</tr>
+<tr>
+<td style="text-align:left">Confident False Positives ($P \ge 0.75, y=0$)</td>
+<td style="text-align:left">170</td>
+<td style="text-align:left">1.16%</td>
+</tr>
+<tr>
+<td style="text-align:left">Confident False Negatives ($P \le 0.25, y=1$)</td>
+<td style="text-align:left">569</td>
+<td style="text-align:left">3.88%</td>
+</tr>
+</tbody>
+</table>
+<p>I sampled 50 representative failure cases (15 False Positives, 35 False Negatives) to inspect their common traits.</p>
+<table>
+<thead>
+<tr>
+<th style="text-align:left">Demographic Metric</th>
+<th style="text-align:left">Adversarial Subset (n=50)</th>
+<th style="text-align:left">Full Test Set (n=14,653)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:left">Mean Age</td>
+<td style="text-align:left">45.1 years</td>
+<td style="text-align:left">38.6 years</td>
+</tr>
+<tr>
+<td style="text-align:left">Male Percentage</td>
+<td style="text-align:left">88.0%</td>
+<td style="text-align:left">66.9%</td>
+</tr>
+<tr>
+<td style="text-align:left">Married-civ-spouse</td>
+<td style="text-align:left">78.0%</td>
+<td style="text-align:left">45.9%</td>
+</tr>
+<tr>
+<td style="text-align:left">Never-married</td>
+<td style="text-align:left">8.0%</td>
+<td style="text-align:left">33.3%</td>
+</tr>
+<tr>
+<td style="text-align:left">Mean Education Num</td>
+<td style="text-align:left">10.3 years</td>
+<td style="text-align:left">10.1 years</td>
+</tr>
+<tr>
+<td style="text-align:left">Mean Hours / Week</td>
+<td style="text-align:left">45.3 hours</td>
+<td style="text-align:left">40.4 hours</td>
+</tr>
+<tr>
+<td style="text-align:left">Mean Capital Gain</td>
+<td style="text-align:left">$358.20</td>
+<td style="text-align:left">$1,052.70</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><strong>False Positives (15 cases):</strong> Exactly 100% are married men, averaging 50.1 years of age, 13.1 years of schooling, and 53.1 weekly hours. The model saw every aggregate signal of high income and slammed the probability above 0.75. Yet their real income is below $50K—often because of low-margin regional self-employment or unmeasured family obligations.</li>
+<li><strong>False Negatives (35 cases):</strong> Averaged only 9.0 years of education with $0 capital gains, yet actually pulled in &gt;$50K. These are trade specialists, contractors, and local business operators whose earnings break out of standard academic brackets.</li>
+<li><strong>Root Failure Mode:</strong> Logistic regression assumes linear additivity in log-odds. It cannot handle the interaction between occupation, geography, and demographics without explicit product terms.</li>
+</ul>
+<hr />
+<h3>2.4: Fairness Trade-Offs &amp; Threshold Sensitivity</h3>
+<p>Using <code>sex</code> as the sensitive attribute (Group A = Male: 9,801 test samples; Group B = Female: 4,852 test samples), I evaluated the model across 19 cut-offs ($t = 0.05$ to $0.95$).</p>
+<table>
+<thead>
+<tr>
+<th style="text-align:left">Cut-off ($t$)</th>
+<th style="text-align:left">DP Ratio</th>
+<th style="text-align:left">EO Gap</th>
+<th style="text-align:left">PP Ratio</th>
+<th style="text-align:left">Overall Acc</th>
+<th style="text-align:left">Male TPR</th>
+<th style="text-align:left">Fem TPR</th>
+<th style="text-align:left">Male FPR</th>
+<th style="text-align:left">Fem FPR</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:left">0.05</td>
+<td style="text-align:left">2.1341</td>
+<td style="text-align:left">1.0268</td>
+<td style="text-align:left">1.3355</td>
+<td style="text-align:left">0.6345</td>
+<td style="text-align:left">0.9863</td>
+<td style="text-align:left">0.9605</td>
+<td style="text-align:left">0.6099</td>
+<td style="text-align:left">0.2630</td>
+</tr>
+<tr>
+<td style="text-align:left">0.15</td>
+<td style="text-align:left">3.1761</td>
+<td style="text-align:left">1.1578</td>
+<td style="text-align:left">1.0119</td>
+<td style="text-align:left">0.7646</td>
+<td style="text-align:left">0.9423</td>
+<td style="text-align:left">0.8139</td>
+<td style="text-align:left">0.4026</td>
+<td style="text-align:left">0.1002</td>
+</tr>
+<tr>
+<td style="text-align:left">0.25</td>
+<td style="text-align:left">3.4443</td>
+<td style="text-align:left">1.1828</td>
+<td style="text-align:left">0.9532</td>
+<td style="text-align:left">0.8174</td>
+<td style="text-align:left">0.8582</td>
+<td style="text-align:left">0.7256</td>
+<td style="text-align:left">0.2725</td>
+<td style="text-align:left">0.0576</td>
+</tr>
+<tr>
+<td style="text-align:left">0.35</td>
+<td style="text-align:left">3.3667</td>
+<td style="text-align:left">1.1708</td>
+<td style="text-align:left">0.9653</td>
+<td style="text-align:left">0.8432</td>
+<td style="text-align:left">0.7637</td>
+<td style="text-align:left">0.6523</td>
+<td style="text-align:left">0.1816</td>
+<td style="text-align:left">0.0394</td>
+</tr>
+<tr>
+<td style="text-align:left">0.45</td>
+<td style="text-align:left">3.2706</td>
+<td style="text-align:left">1.1282</td>
+<td style="text-align:left">0.9575</td>
+<td style="text-align:left">0.8540</td>
+<td style="text-align:left">0.6638</td>
+<td style="text-align:left">0.5883</td>
+<td style="text-align:left">0.1185</td>
+<td style="text-align:left">0.0252</td>
+</tr>
+<tr>
+<td style="text-align:left">0.55</td>
+<td style="text-align:left">3.2403</td>
+<td style="text-align:left">1.1398</td>
+<td style="text-align:left">0.9764</td>
+<td style="text-align:left">0.8529</td>
+<td style="text-align:left">0.5699</td>
+<td style="text-align:left">0.5000</td>
+<td style="text-align:left">0.0780</td>
+<td style="text-align:left">0.0174</td>
+</tr>
+<tr>
+<td style="text-align:left">0.65</td>
+<td style="text-align:left">3.2807</td>
+<td style="text-align:left">1.1712</td>
+<td style="text-align:left">0.9910</td>
+<td style="text-align:left">0.8438</td>
+<td style="text-align:left">0.4579</td>
+<td style="text-align:left">0.3910</td>
+<td style="text-align:left">0.0446</td>
+<td style="text-align:left">0.0102</td>
+</tr>
+<tr>
+<td style="text-align:left">0.75</td>
+<td style="text-align:left">3.1840</td>
+<td style="text-align:left">1.1157</td>
+<td style="text-align:left">0.9727</td>
+<td style="text-align:left">0.8297</td>
+<td style="text-align:left">0.3439</td>
+<td style="text-align:left">0.3083</td>
+<td style="text-align:left">0.0221</td>
+<td style="text-align:left">0.0044</td>
+</tr>
+<tr>
+<td style="text-align:left">0.85</td>
+<td style="text-align:left">3.1326</td>
+<td style="text-align:left">1.1115</td>
+<td style="text-align:left">0.9849</td>
+<td style="text-align:left">0.8112</td>
+<td style="text-align:left">0.2340</td>
+<td style="text-align:left">0.2105</td>
+<td style="text-align:left">0.0081</td>
+<td style="text-align:left">0.0016</td>
+</tr>
+<tr>
+<td style="text-align:left">0.95</td>
+<td style="text-align:left">2.7592</td>
+<td style="text-align:left">0.9998</td>
+<td style="text-align:left">1.0058</td>
+<td style="text-align:left">0.7891</td>
+<td style="text-align:left">0.1240</td>
+<td style="text-align:left">0.1241</td>
+<td style="text-align:left">0.0013</td>
+<td style="text-align:left">0.0005</td>
+</tr>
+</tbody>
+</table>
+<p><img src="figures/part2_4_fairness_tradeoff.png" alt="Fairness Trade-Off Chart" /></p>
+<h4>Quantifying the Friction Between Goals</h4>
+<p>Shifting from $t=0.45$ to $t=0.55$:</p>
+<ul>
+<li><strong>Demographic Parity (DP):</strong> Moves from 3.2706 down to 3.2403 (0.9% improvement toward parity).</li>
+<li><strong>Equalized Odds (EO):</strong> Moves from 1.1282 up to 1.1398 (1.0% deterioration away from parity).</li>
+<li><strong>Trade-Off Exchange Rate:</strong> 1.11. For every 1% gain in demographic representation, error rate disparity gets 1.11% worse.</li>
+</ul>
+<p>The data makes one thing crystal clear: you cannot satisfy Demographic Parity, Equalized Odds, and Predictive Parity at once. Because the underlying base rates are so disparate (30.4% positive for men versus 10.9% for women), equalizing selection rates inevitably wrecks calibration and error rates.</p>
+<hr />
+<h2>Part 3 — Descriptive Analysis Questions</h2>
+<h3>Q1: Why Did the Two Approaches Flag Different Individuals?</h3>
+<p>When I compared the predictions of my OLS linear model and the logistic regression, the two models parted ways on 4,476 out of 14,653 test records—a discordance rate of 30.55%. That is nearly one in three people receiving conflicting assessments. But digging into the confusion matrix revealed that this disagreement was almost entirely one-directional: 4,458 individuals were flagged as high-income by Model A but classified as low-income by Model B, whereas only 18 individuals went the other way.</p>
+<p>This discrepancy stems from the mechanics of how each model assigns decision boundaries. For Model A, I followed the standard practice of using the empirical median prediction (0.2261) as the classification threshold. Because a median mechanically splits any sample into equal halves, Model A was forced to classify roughly 50% of the test cohort (7,327 people) as high earners, even though only 23.99% actually earn above $50K. Logistic regression, on the other hand, outputs well-calibrated probabilities between 0.00 and 1.00. Evaluated at the standard 0.50 cutoff, it flagged only 2,887 individuals (19.7%), mirroring the natural scarcity of high-income households.</p>
+<p>The 4,458 contested individuals are precisely those whose predicted scores fall into the buffer zone between 0.2261 and 0.50. In this range, Model A’s unconstrained linear extrapolation trips its low threshold, while Model B’s sigmoidal curve keeps them safely below the 50% mark. Because Model A forces a 50% selection rate on a 24% baseline, it catches 94% of true positives but suffers a dismal 45% precision. Model B delivers a far more practical 74% precision and 85.38% overall accuracy, avoiding the flood of false alarms that plagues the linear model.</p>
+<hr />
+<h3>Q2: Simpson's Paradox — The Sex-Male Reversal</h3>
+<p>The most jarring finding in my subgroup audit was the sign flip on the sex_Male coefficient when slicing the dataset by marital status. In the full logistic model, sex_Male carries a positive weight of +0.3230 (and +0.5539 in statsmodels with a 95% confidence interval of [0.5237, 0.5841]), which would lead anyone to conclude that men enjoy a clear, uniform income advantage. But when I fit separate regressions across marital cohorts, the male coefficient among married individuals dropped to −0.0816, while remaining positive at +0.3053 among unmarried individuals.</p>
+<p>This reversal is a classic manifestation of Simpson's Paradox, triggered because marital status acts as a massive confounding variable. In this census sample, married individuals boast an income positive rate of 44.60%, compared to a meager 6.39% among unmarried individuals. Furthermore, men in the dataset are disproportionately concentrated in the married category (70.3% of men are married, compared to a much smaller fraction of women). Because marriage is such a potent driver of household earnings, the aggregate male coefficient was simply picking up the economic benefits of marriage, rather than a pure gender premium.</p>
+<p>Within the married slice, controlling for education, work hours, and capital gains, being male actually confers a slight negative penalty (−0.0816). If a policymaker relied exclusively on the aggregate +0.3230 figure, they might enact broad economic subsidies assuming married women lag behind their husbands in earning power. In reality, the true disparity is concentrated among single individuals—particularly unmarried women—who experience the lowest base rates. Treating gender as a monolithic effect blurs the real socioeconomic divide, mistaking family structure for gender disparity.</p>
+<hr />
+<h3>Q3: Omitted-Variable Bias — Dropping Marital Status</h3>
+<p>To see how omitted variable bias behaves in practice, I eliminated marital_status (removing six dummy variables) and re-estimated the logistic regression. The fallout was dramatic, but only if you looked beneath the surface. While overall test accuracy barely budged—falling from 0.8538 to 0.8537, a trivial drop of just 0.0001—the underlying coefficient estimates underwent massive distortions.</p>
+<p>The most extreme shift occurred in relationship_Not-in-family, which swung from +0.2128 all the way down to −0.8490, representing a staggering −499.0% change and a complete reversal of sign. Similar collapses struck relationship_Own-child (−419.1%, moving from −0.2045 to −1.0615) and relationship_Other-relative (−355.6%, shifting from −0.0774 to −0.3528). By contrast, human capital features remained largely stable: education_num nudged upward by only 2.3% (0.5287 to 0.5411) and age increased by 10.2% (0.3478 to 0.3833).</p>
+<p>This selective instability happens because the relationship and marital_status categories are structurally collinear. When marital status was explicitly included in the model, relationship_Not-in-family measured the minor residual effect of living independently conditional on marriage. But once marriage was purged, the relationship dummies had to absorb the massive unobserved penalty of being unmarried. Because the omitted feature's variance was soaked up by its close proxies, predictive accuracy remained virtually untouched.</p>
+<p>This is the central danger of omitted variable bias in algorithmic decision systems: an engineer evaluating this model using standard metrics like ROC-AUC or classification accuracy would conclude the trimmed model is identical to the full one. In reality, the internal explanations and feature attributions had been thoroughly corrupted.</p>
+<hr />
+<h3>Q4: Detecting Hidden Confounds</h3>
+<p>If I were tasked with auditing a production predictive system for hidden confounds, I would never rely on accuracy metrics alone. As my omitted variable experiment proved, a model can shed a vital structural attribute, suffer a 500% coefficient swing, and still maintain identical 85.4% accuracy. To catch these stealth confounds, I would deploy a three-stage diagnostic protocol.</p>
+<p>First, I would perform stratified residual tracking across demographic and operational subgroups. For every discrete feature slice, I would compute the mean signed error (residuals = actual − predicted). If a model is properly specified, its prediction errors should resemble white noise across all slices. If residuals cluster systematically—for instance, if the model consistently under-predicts earnings for single mothers or over-predicts for self-employed contractors—that systematic bias indicates that an unobserved variable correlated with that group is missing from the design matrix.</p>
+<p>Second, I would mandate stability testing under variable ablation. By iteratively dropping correlated clusters of predictors and logging coefficient shifts across surviving features, I can identify which weights are volatile. Any feature whose coefficient swings wildly while loss remains flat is almost certainly functioning as an accidental proxy for an omitted confound, exactly like relationship_Not-in-family did in my experiments.</p>
+<p>Finally, I would conduct a domain-expert causal audit. Machine learning models easily confuse correlation for mechanism. By mapping out a Directed Acyclic Graph (DAG) with labor economists and legal experts, we can trace known causal paths—such as how regional cost-of-living or industry sorting drives wage differences. If the model relies on demographic proxies instead of causal mechanisms, it must be halted prior to deployment.</p>
+<hr />
+<h3>Q5: Adversarial Subset Analysis</h3>
+<p>My adversarial stress test uncovered 739 test cases (5.04% of the holdout sample) where the logistic model made confident blunders, assigning probabilities $\ge 0.75$ to people who earned $\le $50K (170 false positives) or $\le 0.25$ to people who earned $&gt;$50K (569 false negatives). Examining a representative sample of 50 such edge cases revealed clear demographic clustering that exposed the fundamental rigidity of linear decision surfaces.</p>
+<p>The 15 false positive profiles were strikingly uniform: 100% were married men, averaging 50.1 years of age, 13.1 years of schooling, and 53.1 weekly work hours. In the eyes of the model, these individuals check every single box for wealth: the algorithm multiplies their large positive coefficients for marital status (1.159), male gender (0.340), education (0.529), and hours worked (0.354), mechanically pushing their predicted score above 0.75. Yet on the ground, their actual income stayed below $50K. Many were employed in lower-margin trades, regional agriculture, or public service sectors that do not reward long hours with executive salaries.</p>
+<p>Conversely, the 35 false negatives averaged just 9.0 years of education, reported $0 in capital gains, and worked typical hours, yet actually earned high incomes. These represent skilled contractors, technical specialists, and small business owners who built prosperous livelihoods outside the academic pipeline.</p>
+<p>Statistically, the model fails here because logistic regression assumes that log-odds increase linearly and additively across features. It cannot natively capture interactions between job sectors and education levels without explicit interaction terms. It treats an extra ten hours worked identically whether someone is a corporate attorney or an independent repairman, producing confident, systematic errors.</p>
+<hr />
+<h3>Q6: Fairness Trade-Off in Human Terms</h3>
+<p>To understand how abstract fairness metrics translate into real human consequences, consider two workers from my test set: Person A, a 40-year-old married man with a Bachelor’s degree working 50 hours a week, and Person B, a 40-year-old married woman with the exact same degree and identical 50-hour schedule. In their qualifications, productivity, and life circumstances, they are identical.</p>
+<p>Yet at the accuracy-maximizing threshold of $t = 0.45$ (which reaches 85.40% accuracy), the model exhibits a severe Equal Opportunity gap. It correctly identifies 66.38% of qualified high-earning men (TPR_A = 0.6638), but only 58.83% of qualified high-earning women (TPR_B = 0.5883). That means Person B faces a 12.8% lower probability of being recognized as a high earner than Person A, simply because her demographic group has a lower historical base rate. If this system automated loan underwriting or job recruiting, Person B would be repeatedly rejected despite meeting every criteria.</p>
+<p>Now suppose we try to fix this by dialing the threshold all the way up to $t = 0.95$ to achieve near-perfect demographic alignment (DP = 2.7592, EO = 0.9998). On paper, the true positive rates are now balanced at 12.40% for men and 12.41% for women. But look at the human cost: 87.6% of qualified, hard-working applicants of both genders are now systematically denied.</p>
+<p>Between thresholds 0.45 and 0.55, my analysis calculated an exchange rate of 1.11. That means every single 1% gain in demographic parity forces a 1.11% deterioration in equalized odds. Mathematical adjustments cannot magically erase base-rate differences; tweaking thresholds merely decides who bears the burden of misclassification.</p>
+<hr />
+<h3>Q7: Defending Threshold t = 0.35</h3>
+<p>If I had to defend a specific operating point to a regulatory committee, I would select $t = 0.35$. While most machine learning practitioners instinctively default to $t = 0.50$ or chase peak overall accuracy at $t = 0.45$, three specific empirical metrics make $t = 0.35$ the most defensible choice.</p>
+<p>First, it preserves strong predictive utility: overall accuracy sits at 0.8432, which is just 1.1 percentage points below the theoretical maximum of 0.8540 at $t = 0.45$. You do not gut model performance to gain fairness. Second, Predictive Parity reaches 0.9653, which is remarkably close to the ideal parity benchmark of 1.00. This guarantees that when the algorithm flags an applicant as a high earner, that assessment carries nearly identical precision regardless of whether the individual is male or female. Third, it significantly closes the opportunity gap: female true positive rate rises to 0.6523 (compared to 0.5883 at $t = 0.45$), catching a substantial fraction of qualified women who would otherwise be locked out.</p>
+<p>The strongest counter-argument against $t = 0.35$ is that its Demographic Parity ratio remains heavily skewed at 3.3667. Under employment regulations like the EEOC's four-fifths rule, a selection ratio where men are selected 3.37 times as often as women would trigger immediate disparate impact scrutiny.</p>
+<p>My counter-defense is rooted in mathematical reality. Because the underlying census sample contains a three-to-one gender disparity in top earners (30.4% male base rate vs. 10.9% female), forcing Demographic Parity to 1.00 would require severe miscalibration—either mass false rejections of qualified men or mass false approvals of unqualified women. Setting $t = 0.35$ strikes the best achievable compromise between legal calibration and equalized opportunity.</p>
+<hr />
+<h3>Q8: Demographic Parity vs Equalized Odds</h3>
+<p>In the context of the Adult Census Income dataset—where predictions directly influence credit allocations, hiring algorithms, and social benefit eligibility—I firmly argue for prioritizing Equalized Odds over Demographic Parity.</p>
+<p>The core philosophical difference lies in how each metric defines justice. Demographic Parity demands equal selection rates across demographic groups, completely blind to whether applicants possess the underlying qualification. But in this historical census data, the true positive base rate for men is 30.4%, whereas for women it is 10.9%. This gap is not a statistical illusion of our model; it reflects decades of documented structural inequalities in labor markets, caregiving burdens, and industrial sorting. If an engineering team artificially forces DP to equal 1.00, the algorithm must approve unqualified individuals or reject qualified ones simply to fulfill a demographic quota. That destroys individual fairness.</p>
+<p>Equalized Odds, by contrast, demands that error rates be equivalent across groups conditional on actual qualification. At $t = 0.45$, our model achieves an EO gap of 1.1282, ensuring that qualified women (TPR = 58.8%) and qualified men (TPR = 66.4%) are treated with comparable scrutiny, while false alarms remain low for both groups (FPR of 2.5% for women vs. 11.8% for men). Prioritizing Equalized Odds honors the principle of treating like cases alike: anyone who genuinely earns above $50K receives an equal opportunity to be recognized.</p>
+<p>The trade-off, of course, is that the system will mirror society’s existing wealth disparities, maintaining an unequal selection ratio (DP = 3.27). But resolving deep societal wage inequality cannot be achieved by forcing an underwriting model to misrepresent financial reality. That requires affirmative policy interventions, not biased statistical dials.</p>
+<hr />
+<h2>Part 4 — Synthesis &amp; Reflection Essay</h2>
+<h3>The Decision: Conditional Deployment Only</h3>
+<p>If asked whether this model should be deployed in a high-stakes automated environment—such as credit underwriting, hiring screens, or benefits qualification—my answer is a clear and unequivocal conditional deployment. Under no circumstances should this system be turned into an autonomous, unmonitored decision-maker. It may only serve as a secondary decision-support tool within an audited pipeline featuring human appeals, explicit threshold disclosures, and ongoing drift surveillance.</p>
+<p>The rationale behind this restraint comes directly from the empirical stress tests conducted in this study. On the surface, the logistic regression model presents an impressive headline: 85.38% overall accuracy and a ROC-friendly loss profile. In a corporate executive summary, that single number would easily earn a green light. Yet our diagnostics prove that this 85% benchmark is a statistical facade that conceals severe vulnerabilities across five distinct operational dimensions.</p>
+<p>First, aggregate accuracy obscures massive performance disparities across protected groups. At the accuracy-maximizing threshold of $t = 0.45$, the model identifies 66.4% of qualified male earners, but catches only 58.8% of qualified female earners. That 7.6 percentage point shortfall means that a qualified woman is roughly 13% less likely to be verified than an identically qualified man. Reporting an aggregate accuracy of 85% erases this systemic disadvantage from executive visibility.</p>
+<p>Second, the Simpson's Paradox reversal demonstrates that the model’s internal reasoning can be fundamentally wrong even when predictions appear sound. In the aggregate dataset, being male appears to provide a reliable positive income boost (+0.3230). But once conditioned on marital status, that relationship reverses entirely among married couples (−0.0816). The model conflates family structure with gender. Relying on aggregate coefficients to justify decisions would lead an institution to reinforce demographic stereotypes that dissolve upon closer scrutiny.</p>
+<p>Third, our omitted variable bias experiment revealed that dropping a single confounder shifted the weight of <code>relationship_Not-in-family</code> by −499.0%, completely flipping its sign, while accuracy moved by a microscopic 0.0001. A model whose predictive score remains rock-solid while its explanatory logic collapses is dangerous: it proves that accuracy provides zero defense against proxy discrimination.</p>
+<p>Fourth, the adversarial audit identified 739 high-confidence errors (5.04% of the test set). Because the model relies on a rigid linear combination of log-odds, it consistently misjudges married, educated workers in low-margin sectors as wealthy, while penalizing self-made tradespeople with lower formal education. These are not random errors; they are systematic blind spots.</p>
+<p>Finally, the trade-off exchange rate of 1.11 between Demographic Parity and Equalized Odds proves that no statistical tuning can eliminate unfairness. Responsible engineering requires accepting that a single accuracy metric is a dangerous simplification. Real accountability demands a multi-metric dashboard that openly acknowledges who gains, who loses, and what values are prioritized. Ultimately, algorithmic systems do not exist in a vacuum; they interact with real people whose livelihoods depend on fair treatment. If we deploy them carelessly behind the shield of a single summary number, we do not eliminate bias—we simply automate it.</p>
+
+</body>
+</html>
